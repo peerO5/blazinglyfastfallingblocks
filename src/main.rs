@@ -1,30 +1,38 @@
-use fastrand;
-use std::{io::{self, Write}, time::Duration, thread, sync::{Arc, Condvar, Mutex}};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::{
     cursor::{self, MoveTo},
-    execute,
-    queue,
+    execute, queue,
     style::{Color, Print, ResetColor, SetForegroundColor},
-    terminal::{self, EnterAlternateScreen, LeaveAlternateScreen,Clear, ClearType,enable_raw_mode, disable_raw_mode},
+    terminal::{
+        self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode,
+    },
 };
+use fastrand;
 use std::fmt;
+use std::{
+    io::{self, Write},
+    sync::{Arc, Condvar, Mutex},
+    thread,
+    time::Duration,
+};
 
 fn main() {
     match play_tetris() {
-    Ok((level, score)) => {println!("you reached level: {}", level); println!("with a score of: {}",score)},
-    Err(e) => println!("{:?}", e)
-
+        Ok((level, score)) => {
+            println!("you reached level: {}", level);
+            println!("with a score of: {}", score)
+        }
+        Err(e) => println!("{:?}", e),
     }
 }
-
 
 fn play_tetris() -> io::Result<(u32, u32)> {
     let debug_mode = false;
     let mut first_tetromino = generate_random_tetromino(7);
     let tetromino_being_played = u8_to_tetromino(first_tetromino);
 
-    let level = Arc::new(Mutex::new(0u32)); 
+    let level = Arc::new(Mutex::new(0u32));
     let board = Arc::new(Mutex::new(Board::new()));
     let active_tetromino = Arc::new((Mutex::new(Some(tetromino_being_played)), Condvar::new()));
     let score = Arc::new(Mutex::new(0u32));
@@ -37,74 +45,81 @@ fn play_tetris() -> io::Result<(u32, u32)> {
     let printer_board = Arc::clone(&board);
     let printer_level = Arc::clone(&level);
     let printer_active_tetromino = Arc::clone(&active_tetromino);
-    let printer_score = Arc::clone(&score); 
+    let printer_score = Arc::clone(&score);
     let printer_next_tetromino = Arc::clone(&next_tetromino);
     thread::spawn(move || {
-            let speeds = [798, 715, 632, 549, 466, 383, 300, 216, 133, 100, 83,83,83, 67, 67, 67, 50, 50, 50, 33, 33, 33, 33, 33, 33, 33, 33, 33, 33, 17];
-            loop {
-                //println!("moving block one down");
-                let level = worker_level.lock().unwrap();
-                let speed = if *level > 29 {
-                    17
-                } else {
-                    speeds[*level as usize]
-                };
-                drop(level);
-                thread::sleep(Duration::from_millis(speed));
-                let (mutex, condvar) = &*worker_active_tetromino;
-                let mut guard = mutex.lock().unwrap();
-                while guard.is_none() {
-                    //println!("guard is none waiting");
-                    guard = condvar.wait(guard).unwrap();
-                }
-                let old_value = guard.take().expect("value should be present");
-                
-                let new_value = Tetromino::move_down(&old_value);
-                let mut board = worker_board.lock().unwrap();
-
-                //println!("{:?}",&new_value);
-                if possible(&board, &new_value){
-                    *guard = Some(new_value);
-                } else {
-                    if connected(&board, &old_value) {
-                        //println!("adding block to board");
-                        //println!("{:?}",old_value);
-                        (*board).add_tetromino(&old_value);
-                        *guard = None;
-                        //println!("{:?}", &board);
-                    } else {
-                        *guard = Some(old_value);
-                    }
-                } 
+        let speeds = [
+            798, 715, 632, 549, 466, 383, 300, 216, 133, 100, 83, 83, 83, 67, 67, 67, 50, 50, 50,
+            33, 33, 33, 33, 33, 33, 33, 33, 33, 33, 17,
+        ];
+        loop {
+            //println!("moving block one down");
+            let level = worker_level.lock().unwrap();
+            let speed = if *level > 29 {
+                17
+            } else {
+                speeds[*level as usize]
             };
+            drop(level);
+            thread::sleep(Duration::from_millis(speed));
+            let (mutex, condvar) = &*worker_active_tetromino;
+            let mut guard = mutex.lock().unwrap();
+            while guard.is_none() {
+                //println!("guard is none waiting");
+                guard = condvar.wait(guard).unwrap();
+            }
+            let old_value = guard.take().expect("value should be present");
+
+            let new_value = Tetromino::move_down(&old_value);
+            let mut board = worker_board.lock().unwrap();
+
+            //println!("{:?}",&new_value);
+            if possible(&board, &new_value) {
+                *guard = Some(new_value);
+            } else {
+                if connected(&board, &old_value) {
+                    //println!("adding block to board");
+                    //println!("{:?}",old_value);
+                    (*board).add_tetromino(&old_value);
+                    *guard = None;
+                    //println!("{:?}", &board);
+                } else {
+                    *guard = Some(old_value);
+                }
+            }
+        }
     });
 
-    thread::spawn( move || {
-
-        let  (mut cols_old, mut rows_old) = terminal::size().unwrap();
+    thread::spawn(move || {
+        let (mut cols_old, mut rows_old) = terminal::size().unwrap();
         loop {
-
             thread::sleep(Duration::from_millis(16));
             let level = printer_level.lock().unwrap();
             let guard = printer_active_tetromino.0.lock().unwrap();
             let board = printer_board.lock().unwrap();
             let second_tetromino = printer_next_tetromino.lock().unwrap();
             let score = printer_score.lock().unwrap();
-            let ( cols, rows) = terminal::size().unwrap();
+            let (cols, rows) = terminal::size().unwrap();
             if cols_old != cols || rows_old != rows {
                 execute!(io::stdout(), Clear(ClearType::All)).unwrap();
                 cols_old = cols;
                 rows_old = rows;
-
             }
 
             let x_offset = cols.saturating_sub(25) / 2;
-            let y_offset = rows.saturating_sub(21) /2;
-            render_game(&board, guard.as_ref().unwrap(),  *second_tetromino, *score, *level, x_offset, y_offset).unwrap()
+            let y_offset = rows.saturating_sub(21) / 2;
+            render_game(
+                &board,
+                guard.as_ref().unwrap(),
+                *second_tetromino,
+                *score,
+                *level,
+                x_offset,
+                y_offset,
+            )
+            .unwrap()
         }
-
     });
-
 
     if !debug_mode {
         enable_raw_mode()?;
@@ -113,7 +128,7 @@ fn play_tetris() -> io::Result<(u32, u32)> {
     let points = [0, 40, 100, 300, 1200];
     let mut second_tetromino = generate_random_tetromino(first_tetromino);
     let mut lines = 0;
-    let res_tup: io::Result<(u32, u32), > = loop {
+    let res_tup: io::Result<(u32, u32)> = loop {
         let (mutex, condvar) = &*active_tetromino;
         let mut level_val = level.lock().unwrap();
         let mut guard = mutex.lock().unwrap();
@@ -135,51 +150,60 @@ fn play_tetris() -> io::Result<(u32, u32)> {
             //println!("notifing");
             condvar.notify_one();
             if board.board[board.board.len() - 1].iter().any(|&x| x != 0) {
-                break Ok((*level_val,*score));
+                break Ok((*level_val, *score));
             }
         }
         drop(level_val);
         drop(guard);
         //println!("get board to print");
-        
+
         let action = if event::poll(Duration::from_millis(0)).unwrap() {
             if let Event::Key(key) = event::read().unwrap() {
                 if key.kind == KeyEventKind::Press {
                     match key.code {
                         KeyCode::Char('r') => 4,
                         KeyCode::Char(' ') => 0,
-                        KeyCode::Down =>  1,
+                        KeyCode::Down => 1,
                         KeyCode::Left => 2,
                         KeyCode::Right => 3,
                         KeyCode::Char('e') => 4,
                         KeyCode::Char('q') => 5,
                         _ => continue,
                     }
-                } else {-1}
-            } else {-1}
-        } else {-1};
-        
+                } else {
+                    -1
+                }
+            } else {
+                -1
+            }
+        } else {
+            -1
+        };
+
         let mut guard = mutex.lock().unwrap();
         let mut board = board.lock().unwrap();
         match action {
             -1 => continue,
-            0 => {hard_drop_naive(&mut board, &guard.take().expect("should never happen"));
-                  *guard = None;},
-            1 => {let old_val = guard.take().expect("should never happen");
-                  let new_val = Tetromino::move_down(&old_val);
-                  if possible(&board, &new_val){
-                      if connected(&board, &new_val) {
-                          //println!("adding block to board");
-                          (*board).add_tetromino(&new_val);
-                          *guard = None;
-                          //println!("{:?}", &board);
-                      } else {
-                          *guard = Some(new_val);
-                      }
-                  } else {
-                      *guard = Some(old_val);
-                  }                  
-            },
+            0 => {
+                hard_drop_naive(&mut board, &guard.take().expect("should never happen"));
+                *guard = None;
+            }
+            1 => {
+                let old_val = guard.take().expect("should never happen");
+                let new_val = Tetromino::move_down(&old_val);
+                if possible(&board, &new_val) {
+                    if connected(&board, &new_val) {
+                        //println!("adding block to board");
+                        (*board).add_tetromino(&new_val);
+                        *guard = None;
+                        //println!("{:?}", &board);
+                    } else {
+                        *guard = Some(new_val);
+                    }
+                } else {
+                    *guard = Some(old_val);
+                }
+            }
             2 => {
                 let old_val = guard.take().expect("should never happen");
                 let new_val = Tetromino::move_left(&old_val);
@@ -218,7 +242,7 @@ fn play_tetris() -> io::Result<(u32, u32)> {
                 }
             }
 
-            _ => panic!("should never happen")
+            _ => panic!("should never happen"),
         }
     };
     if !debug_mode {
@@ -228,33 +252,31 @@ fn play_tetris() -> io::Result<(u32, u32)> {
     return Ok(res_tup?);
 }
 
-
-
 #[derive(Debug)]
 struct Board {
-board: [[u8 ; 10];20],
+    board: [[u8; 10]; 20],
 }
-
 
 impl fmt::Display for Board {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-     for row in self.board.iter().rev() {
+        for row in self.board.iter().rev() {
             write!(f, "\u{2588}")?;
             for cell in row {
                 if *cell != 0 {
-                    write!(f,"\u{2588}\u{2588}")?
+                    write!(f, "\u{2588}\u{2588}")?
                 } else {
                     write!(f, ". ")?;
                 }
-
             }
-            write!(f,"\u{2588}\r\n").unwrap();
+            write!(f, "\u{2588}\r\n").unwrap();
         }
-        write!(f, "\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\r\n")?;
+        write!(
+            f,
+            "\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\r\n"
+        )?;
         Ok(())
-        }
+    }
 }
-
 
 /// coordinates are from left to right top to bottom of default positin
 /// * *   *     * *    * *          *       *  *
@@ -264,199 +286,325 @@ impl fmt::Display for Board {
 /// the plus is the rotation point
 #[derive(Debug, Copy, Clone)]
 enum Tetromino {
-O(u8, (u8,u8),(u8,u8),(u8,u8),(u8,u8)),
-I(u8, (u8,u8),(u8,u8),(u8,u8),(u8,u8)),
-S(u8, (u8,u8),(u8,u8),(u8,u8),(u8,u8)),
-Z(u8, (u8,u8),(u8,u8),(u8,u8),(u8,u8)),
-T(u8, (u8,u8),(u8,u8),(u8,u8),(u8,u8)),
-J(u8, (u8,u8),(u8,u8),(u8,u8),(u8,u8)),
-L(u8, (u8,u8),(u8,u8),(u8,u8),(u8,u8)),
+    O(u8, (u8, u8), (u8, u8), (u8, u8), (u8, u8)),
+    I(u8, (u8, u8), (u8, u8), (u8, u8), (u8, u8)),
+    S(u8, (u8, u8), (u8, u8), (u8, u8), (u8, u8)),
+    Z(u8, (u8, u8), (u8, u8), (u8, u8), (u8, u8)),
+    T(u8, (u8, u8), (u8, u8), (u8, u8), (u8, u8)),
+    J(u8, (u8, u8), (u8, u8), (u8, u8), (u8, u8)),
+    L(u8, (u8, u8), (u8, u8), (u8, u8), (u8, u8)),
 }
 
 impl Tetromino {
     fn rotate_right(&self) -> Tetromino {
         match *self {
-            Tetromino::O(rotation, c1,c2,c3,c4) => {Tetromino::O_rotate_right(rotation, c1, c2, c3, c4)}
-            Tetromino::I(rotation, c1,c2,c3,c4) => {Tetromino::I_rotate_right(rotation, c1, c2, c3, c4)}
-            Tetromino::S(rotation, c1,c2,c3,c4) => {Tetromino::S_rotate_right(rotation, c1, c2, c3, c4)}
-            Tetromino::Z(rotation, c1,c2,c3,c4) => {Tetromino::Z_rotate_right(rotation, c1, c2, c3, c4)}
-            Tetromino::T(rotation, c1,c2,c3,c4) => {Tetromino::T_rotate_right(rotation, c1, c2, c3, c4)}
-            Tetromino::J(rotation, c1,c2,c3,c4) => {Tetromino::J_rotate_right(rotation, c1, c2, c3, c4)}
-            Tetromino::L(rotation, c1,c2,c3,c4) => {Tetromino::L_rotate_right(rotation, c1, c2, c3, c4)}
-
-
+            Tetromino::O(rotation, c1, c2, c3, c4) => {
+                Tetromino::O_rotate_right(rotation, c1, c2, c3, c4)
+            }
+            Tetromino::I(rotation, c1, c2, c3, c4) => {
+                Tetromino::I_rotate_right(rotation, c1, c2, c3, c4)
+            }
+            Tetromino::S(rotation, c1, c2, c3, c4) => {
+                Tetromino::S_rotate_right(rotation, c1, c2, c3, c4)
+            }
+            Tetromino::Z(rotation, c1, c2, c3, c4) => {
+                Tetromino::Z_rotate_right(rotation, c1, c2, c3, c4)
+            }
+            Tetromino::T(rotation, c1, c2, c3, c4) => {
+                Tetromino::T_rotate_right(rotation, c1, c2, c3, c4)
+            }
+            Tetromino::J(rotation, c1, c2, c3, c4) => {
+                Tetromino::J_rotate_right(rotation, c1, c2, c3, c4)
+            }
+            Tetromino::L(rotation, c1, c2, c3, c4) => {
+                Tetromino::L_rotate_right(rotation, c1, c2, c3, c4)
+            }
         }
-
     }
 
     fn rotate_left(&self) -> Tetromino {
-    self.rotate_right().rotate_right().rotate_right()
+        self.rotate_right().rotate_right().rotate_right()
     }
 
-    fn O_rotate_right(rotation:u8, (x1, y1):(u8,u8), (x2, y2):(u8,u8), (x3, y3):(u8,u8), (x4, y4):(u8,u8)) -> Tetromino{
+    fn O_rotate_right(
+        rotation: u8,
+        (x1, y1): (u8, u8),
+        (x2, y2): (u8, u8),
+        (x3, y3): (u8, u8),
+        (x4, y4): (u8, u8),
+    ) -> Tetromino {
         match rotation {
-            0 => {Tetromino::O(1,(x4, y4 + 1),(x4 + 1, y4 + 1) ,(x4,y4),(x4 + 1, y4))},
+            0 => Tetromino::O(1, (x4, y4 + 1), (x4 + 1, y4 + 1), (x4, y4), (x4 + 1, y4)),
 
-            1 => {Tetromino::O(2, (x3, y3), (x3+1, y3), (x3, y3 - 1),(x3 + 1, y3 - 1))},
-            2 => {Tetromino::O(3, (x1 - 1, y1), (x1, y1), (x1 - 1, y1 - 1), (x1, y1 - 1))},
-            3 => {Tetromino::O(0, (x2 - 1, y2 + 1), (x2, y2 + 1), (x2 - 1, y2), (x2, y2))},
-            _ => panic!("error: rotation should never be a value higher than 3")
+            1 => Tetromino::O(2, (x3, y3), (x3 + 1, y3), (x3, y3 - 1), (x3 + 1, y3 - 1)),
+            2 => Tetromino::O(3, (x1 - 1, y1), (x1, y1), (x1 - 1, y1 - 1), (x1, y1 - 1)),
+            3 => Tetromino::O(0, (x2 - 1, y2 + 1), (x2, y2 + 1), (x2 - 1, y2), (x2, y2)),
+            _ => panic!("error: rotation should never be a value higher than 3"),
         }
     }
 
-    fn I_rotate_right(rotation:u8, (x1, y1):(u8,u8), (x2, y2):(u8,u8), (x3, y3):(u8,u8), (x4, y4):(u8,u8)) -> Tetromino {
+    fn I_rotate_right(
+        rotation: u8,
+        (x1, y1): (u8, u8),
+        (x2, y2): (u8, u8),
+        (x3, y3): (u8, u8),
+        (x4, y4): (u8, u8),
+    ) -> Tetromino {
         match rotation {
-            0 => {if x2 < 2 {return Tetromino::I(rotation, (x1,y1), (x2,y2), (x3,y3), (x4,y4))}
-                Tetromino::I(1, (x2-2, y2), (x2 -1 , y2), (x2, y2), (x2 + 1, y2))},
-            1 => {Tetromino::I(2, (x3, y3 + 2), (x3, y3 + 1), (x3, y3), (x3, y3 - 1))},
-            2 => {Tetromino::I(3, (x3- 1, y3), (x3, y3), (x3 + 1, y3), (x3 + 2, y3))},
-            3 => {if y2 < 2 {return Tetromino::I(rotation, (x1,y1), (x2,y2), (x3,y3), (x4,y4))}
-                Tetromino::I(0, (x2, y2 + 1), (x2, y2), (x2, y2 - 1), (x2, y2 - 2))},
-            _ => panic!("error: rotation should never be a value higher than 3")
+            0 => {
+                if x2 < 2 {
+                    return Tetromino::I(rotation, (x1, y1), (x2, y2), (x3, y3), (x4, y4));
+                }
+                Tetromino::I(1, (x2 - 2, y2), (x2 - 1, y2), (x2, y2), (x2 + 1, y2))
+            }
+            1 => Tetromino::I(2, (x3, y3 + 2), (x3, y3 + 1), (x3, y3), (x3, y3 - 1)),
+            2 => Tetromino::I(3, (x3 - 1, y3), (x3, y3), (x3 + 1, y3), (x3 + 2, y3)),
+            3 => {
+                if y2 < 2 {
+                    return Tetromino::I(rotation, (x1, y1), (x2, y2), (x3, y3), (x4, y4));
+                }
+                Tetromino::I(0, (x2, y2 + 1), (x2, y2), (x2, y2 - 1), (x2, y2 - 2))
+            }
+            _ => panic!("error: rotation should never be a value higher than 3"),
         }
     }
 
-    fn S_rotate_right (rotation:u8, (x1, y1):(u8,u8), (x2, y2):(u8,u8), (x3, y3):(u8,u8), (x4, y4):(u8,u8)) -> Tetromino {
+    fn S_rotate_right(
+        rotation: u8,
+        (x1, y1): (u8, u8),
+        (x2, y2): (u8, u8),
+        (x3, y3): (u8, u8),
+        (x4, y4): (u8, u8),
+    ) -> Tetromino {
         match rotation {
-            0 => {Tetromino::S(1, (x4, y4 + 1), (x4, y4), (x4 + 1, y4), (x4 + 1, y4 -1))},
-            1 => {Tetromino::S(2, (x2, y2), (x2 + 1, y2), (x2 -1 , y2 - 1), (x2, y2 - 1))},
-            2 => {Tetromino::S(3, (x1 - 1, y1 + 1), (x1 -1 , y1), (x1, y1), (x1, y1 - 1))},
-            3 => {Tetromino::S(0, (x3, y3 + 1), (x3 + 1, y3 + 1), (x3 - 1, y3), (x3, y3))},
-            _ => panic!("error: rotation should never be a value higher than 3")
+            0 => Tetromino::S(1, (x4, y4 + 1), (x4, y4), (x4 + 1, y4), (x4 + 1, y4 - 1)),
+            1 => Tetromino::S(2, (x2, y2), (x2 + 1, y2), (x2 - 1, y2 - 1), (x2, y2 - 1)),
+            2 => Tetromino::S(3, (x1 - 1, y1 + 1), (x1 - 1, y1), (x1, y1), (x1, y1 - 1)),
+            3 => Tetromino::S(0, (x3, y3 + 1), (x3 + 1, y3 + 1), (x3 - 1, y3), (x3, y3)),
+            _ => panic!("error: rotation should never be a value higher than 3"),
         }
     }
 
-    fn Z_rotate_right (rotation:u8, (x1, y1):(u8,u8), (x2, y2):(u8,u8), (x3, y3):(u8,u8), (x4, y4):(u8,u8)) -> Tetromino {
+    fn Z_rotate_right(
+        rotation: u8,
+        (x1, y1): (u8, u8),
+        (x2, y2): (u8, u8),
+        (x3, y3): (u8, u8),
+        (x4, y4): (u8, u8),
+    ) -> Tetromino {
         match rotation {
-            0 => {Tetromino::Z(1, (x3 + 1, y3 + 1), (x3, y3), (x3 + 1, y3), (x3, y3 -1))},
-            1 => {Tetromino::Z(2, (x2 -1, y2), (x2, y2), (x2, y2 - 1), (x2 + 1, y2 - 1))},
-            2 => {Tetromino::Z(3, (x2, y2 + 1), (x2 -1, y2), (x2, y2), (x2 -1 , y2 -1))},
-            3 => {Tetromino::Z(0, (x3 - 1, y3 + 1), (x3, y3 + 1), (x3, y3), (x3 + 1, y3))},
-            _ => panic!("error: rotation should never be a value higher than 3")
-
+            0 => Tetromino::Z(1, (x3 + 1, y3 + 1), (x3, y3), (x3 + 1, y3), (x3, y3 - 1)),
+            1 => Tetromino::Z(2, (x2 - 1, y2), (x2, y2), (x2, y2 - 1), (x2 + 1, y2 - 1)),
+            2 => Tetromino::Z(3, (x2, y2 + 1), (x2 - 1, y2), (x2, y2), (x2 - 1, y2 - 1)),
+            3 => Tetromino::Z(0, (x3 - 1, y3 + 1), (x3, y3 + 1), (x3, y3), (x3 + 1, y3)),
+            _ => panic!("error: rotation should never be a value higher than 3"),
         }
     }
 
-    fn T_rotate_right(rotation:u8, (x1, y1):(u8,u8), (x2, y2):(u8,u8), (x3, y3):(u8,u8), (x4, y4):(u8,u8)) -> Tetromino {
+    fn T_rotate_right(
+        rotation: u8,
+        (x1, y1): (u8, u8),
+        (x2, y2): (u8, u8),
+        (x3, y3): (u8, u8),
+        (x4, y4): (u8, u8),
+    ) -> Tetromino {
         match rotation {
-            0 => {Tetromino::T(1, (x3, y3 + 1), (x3, y3), (x3 + 1, y3), (x3, y3 - 1))},
-            1 => {Tetromino::T(2 , (x2 -1, y2), (x2, y2), (x2 + 1, y2), (x2, y2 - 1))},
-            2 => {Tetromino::T(3, (x2, y2 + 1), (x2 - 1, y2), (x2, y2), (x2, y2 - 1))},
-            3 => {Tetromino::T(0, (x3, y3 + 1), (x3 - 1, y3), (x3, y3), (x3 + 1, y3))},
-            _ => panic!("error: rotation should never be a value higher than 3")
+            0 => Tetromino::T(1, (x3, y3 + 1), (x3, y3), (x3 + 1, y3), (x3, y3 - 1)),
+            1 => Tetromino::T(2, (x2 - 1, y2), (x2, y2), (x2 + 1, y2), (x2, y2 - 1)),
+            2 => Tetromino::T(3, (x2, y2 + 1), (x2 - 1, y2), (x2, y2), (x2, y2 - 1)),
+            3 => Tetromino::T(0, (x3, y3 + 1), (x3 - 1, y3), (x3, y3), (x3 + 1, y3)),
+            _ => panic!("error: rotation should never be a value higher than 3"),
         }
     }
 
-    fn J_rotate_right (rotation:u8, (x1, y1):(u8,u8), (x2, y2):(u8,u8), (x3, y3):(u8,u8), (x4, y4):(u8,u8)) -> Tetromino {
+    fn J_rotate_right(
+        rotation: u8,
+        (x1, y1): (u8, u8),
+        (x2, y2): (u8, u8),
+        (x3, y3): (u8, u8),
+        (x4, y4): (u8, u8),
+    ) -> Tetromino {
         match rotation {
-            0 => {Tetromino::J(1, (x2 - 1, y2 + 1), (x2 -1 , y2), (x2, y2), (x2 + 1, y2))},
-            1 => {Tetromino::J(2, (x3, y3 + 1), (x3 + 1, y3 + 1), (x3, y3), (x3, y3 - 1))},
-            2 => {Tetromino::J(3, (x3 - 1, y3), (x3, y3), (x3 + 1, y3), (x3 + 1, y3 - 1))},
-            3 => {Tetromino::J(0, (x2, y2 + 1), (x2, y2), (x2 - 1, y2 -1), (x2, y2 - 1))},
-            _ => panic!("error: rotation should never be a value higher than 3")
+            0 => Tetromino::J(1, (x2 - 1, y2 + 1), (x2 - 1, y2), (x2, y2), (x2 + 1, y2)),
+            1 => Tetromino::J(2, (x3, y3 + 1), (x3 + 1, y3 + 1), (x3, y3), (x3, y3 - 1)),
+            2 => Tetromino::J(3, (x3 - 1, y3), (x3, y3), (x3 + 1, y3), (x3 + 1, y3 - 1)),
+            3 => Tetromino::J(0, (x2, y2 + 1), (x2, y2), (x2 - 1, y2 - 1), (x2, y2 - 1)),
+            _ => panic!("error: rotation should never be a value higher than 3"),
         }
     }
 
-    fn L_rotate_right (rotation:u8, (x1, y1):(u8,u8), (x2, y2):(u8,u8), (x3, y3):(u8,u8), (x4, y4):(u8,u8)) -> Tetromino {
+    fn L_rotate_right(
+        rotation: u8,
+        (x1, y1): (u8, u8),
+        (x2, y2): (u8, u8),
+        (x3, y3): (u8, u8),
+        (x4, y4): (u8, u8),
+    ) -> Tetromino {
         match rotation {
-            0 => {Tetromino::L(1, (x2 - 1, y2), (x2, y2), (x2 + 1, y2), (x2 - 1, y2 - 1))},
-            1 => {Tetromino::L(2, (x2 - 1, y2 + 1), (x2, y2 + 1), (x2, y2), (x2 , y2 - 1))},
-            2 => {Tetromino::L(3, (x3 + 1, y3 + 1), (x3, y3), (x3 - 1, y3), (x3 + 1, y3))},
-            3 => {Tetromino::L(0, (x2, y2 + 1), (x2, y2), (x2, y2 - 1), (x2 + 1, y2 - 1))},
-            _ => panic!("error: rotation should never be a value higher than 3")
+            0 => Tetromino::L(1, (x2 - 1, y2), (x2, y2), (x2 + 1, y2), (x2 - 1, y2 - 1)),
+            1 => Tetromino::L(2, (x2 - 1, y2 + 1), (x2, y2 + 1), (x2, y2), (x2, y2 - 1)),
+            2 => Tetromino::L(3, (x3 + 1, y3 + 1), (x3, y3), (x3 - 1, y3), (x3 + 1, y3)),
+            3 => Tetromino::L(0, (x2, y2 + 1), (x2, y2), (x2, y2 - 1), (x2 + 1, y2 - 1)),
+            _ => panic!("error: rotation should never be a value higher than 3"),
         }
     }
-
-
-
-
-
-
 
     fn move_right(&self) -> Tetromino {
-
-        fn move_tetromino_right (rotation:u8, (x1, y1):(u8,u8), (x2, y2):(u8,u8), (x3, y3):(u8,u8), (x4, y4):(u8,u8)) -> (u8, (u8,u8), (u8,u8), (u8,u8), (u8,u8)) {
-                (rotation, (x1 + 1, y1), (x2 + 1, y2), (x3 + 1, y3), (x4 + 1, y4))
-            }
+        fn move_tetromino_right(
+            rotation: u8,
+            (x1, y1): (u8, u8),
+            (x2, y2): (u8, u8),
+            (x3, y3): (u8, u8),
+            (x4, y4): (u8, u8),
+        ) -> (u8, (u8, u8), (u8, u8), (u8, u8), (u8, u8)) {
+            (
+                rotation,
+                (x1 + 1, y1),
+                (x2 + 1, y2),
+                (x3 + 1, y3),
+                (x4 + 1, y4),
+            )
+        }
 
         match *self {
-            Tetromino::O(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_right(rotation, c1,c2,c3,c4);
-                                                    Tetromino::O(r, cn1, cn2, cn3, cn4)},
-            Tetromino::I(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_right(rotation, c1, c2, c3, c4);
-                                                    Tetromino::I(r, cn1, cn2, cn3, cn4)},
-            Tetromino::S(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_right(rotation, c1, c2, c3, c4);
-                                                    Tetromino::S(r, cn1, cn2, cn3, cn4)},
-            Tetromino::Z(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_right(rotation, c1, c2, c3, c4);
-                                                    Tetromino::Z(r, cn1, cn2, cn3, cn4)},
-            Tetromino::T(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_right(rotation, c1, c2, c3, c4);
-                                                    Tetromino::T(r, cn1, cn2, cn3, cn4)},
-            Tetromino::J(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_right(rotation, c1, c2, c3, c4);
-                                                    Tetromino::J(r, cn1, cn2, cn3, cn4)},
-            Tetromino::L(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_right(rotation, c1, c2, c3, c4);
-                                                    Tetromino::L(r, cn1, cn2, cn3, cn4)}
+            Tetromino::O(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_right(rotation, c1, c2, c3, c4);
+                Tetromino::O(r, cn1, cn2, cn3, cn4)
+            }
+            Tetromino::I(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_right(rotation, c1, c2, c3, c4);
+                Tetromino::I(r, cn1, cn2, cn3, cn4)
+            }
+            Tetromino::S(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_right(rotation, c1, c2, c3, c4);
+                Tetromino::S(r, cn1, cn2, cn3, cn4)
+            }
+            Tetromino::Z(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_right(rotation, c1, c2, c3, c4);
+                Tetromino::Z(r, cn1, cn2, cn3, cn4)
+            }
+            Tetromino::T(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_right(rotation, c1, c2, c3, c4);
+                Tetromino::T(r, cn1, cn2, cn3, cn4)
+            }
+            Tetromino::J(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_right(rotation, c1, c2, c3, c4);
+                Tetromino::J(r, cn1, cn2, cn3, cn4)
+            }
+            Tetromino::L(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_right(rotation, c1, c2, c3, c4);
+                Tetromino::L(r, cn1, cn2, cn3, cn4)
+            }
         }
-        
     }
 
     fn move_left(&self) -> Tetromino {
-
-        fn move_tetromino_left (rotation:u8, (x1, y1):(u8,u8), (x2, y2):(u8,u8), (x3, y3):(u8,u8), (x4, y4):(u8,u8)) -> (u8, (u8,u8), (u8,u8), (u8,u8), (u8,u8)) {
-                (rotation, (x1 - 1, y1), (x2 - 1, y2), (x3 - 1, y3), (x4 - 1, y4))
-            }
+        fn move_tetromino_left(
+            rotation: u8,
+            (x1, y1): (u8, u8),
+            (x2, y2): (u8, u8),
+            (x3, y3): (u8, u8),
+            (x4, y4): (u8, u8),
+        ) -> (u8, (u8, u8), (u8, u8), (u8, u8), (u8, u8)) {
+            (
+                rotation,
+                (x1 - 1, y1),
+                (x2 - 1, y2),
+                (x3 - 1, y3),
+                (x4 - 1, y4),
+            )
+        }
 
         match *self {
-            Tetromino::O(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_left(rotation, c1,c2,c3,c4);
-                                                    Tetromino::O(r, cn1, cn2, cn3, cn4)},
-            Tetromino::I(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_left(rotation, c1, c2, c3, c4);
-                                                    Tetromino::I(r, cn1, cn2, cn3, cn4)},
-            Tetromino::S(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_left(rotation, c1, c2, c3, c4);
-                                                    Tetromino::S(r, cn1, cn2, cn3, cn4)},
-            Tetromino::Z(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_left(rotation, c1, c2, c3, c4);
-                                                    Tetromino::Z(r, cn1, cn2, cn3, cn4)},
-            Tetromino::T(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_left(rotation, c1, c2, c3, c4);
-                                                    Tetromino::T(r, cn1, cn2, cn3, cn4)},
-            Tetromino::J(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_left(rotation, c1, c2, c3, c4);
-                                                    Tetromino::J(r, cn1, cn2, cn3, cn4)},
-            Tetromino::L(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_left(rotation, c1, c2, c3, c4);
-                                                    Tetromino::L(r, cn1, cn2, cn3, cn4)}
+            Tetromino::O(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_left(rotation, c1, c2, c3, c4);
+                Tetromino::O(r, cn1, cn2, cn3, cn4)
+            }
+            Tetromino::I(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_left(rotation, c1, c2, c3, c4);
+                Tetromino::I(r, cn1, cn2, cn3, cn4)
+            }
+            Tetromino::S(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_left(rotation, c1, c2, c3, c4);
+                Tetromino::S(r, cn1, cn2, cn3, cn4)
+            }
+            Tetromino::Z(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_left(rotation, c1, c2, c3, c4);
+                Tetromino::Z(r, cn1, cn2, cn3, cn4)
+            }
+            Tetromino::T(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_left(rotation, c1, c2, c3, c4);
+                Tetromino::T(r, cn1, cn2, cn3, cn4)
+            }
+            Tetromino::J(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_left(rotation, c1, c2, c3, c4);
+                Tetromino::J(r, cn1, cn2, cn3, cn4)
+            }
+            Tetromino::L(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_left(rotation, c1, c2, c3, c4);
+                Tetromino::L(r, cn1, cn2, cn3, cn4)
+            }
         }
-        
     }
 
     fn move_down(&self) -> Tetromino {
-
-        fn move_tetromino_down (rotation:u8, (x1, y1):(u8,u8), (x2, y2):(u8,u8), (x3, y3):(u8,u8), (x4, y4):(u8,u8)) -> (u8, (u8,u8), (u8,u8), (u8,u8), (u8,u8)) {
-                (rotation, (x1, y1 - 1), (x2, y2- 1), (x3, y3 - 1), (x4, y4- 1))
-            }
+        fn move_tetromino_down(
+            rotation: u8,
+            (x1, y1): (u8, u8),
+            (x2, y2): (u8, u8),
+            (x3, y3): (u8, u8),
+            (x4, y4): (u8, u8),
+        ) -> (u8, (u8, u8), (u8, u8), (u8, u8), (u8, u8)) {
+            (
+                rotation,
+                (x1, y1 - 1),
+                (x2, y2 - 1),
+                (x3, y3 - 1),
+                (x4, y4 - 1),
+            )
+        }
 
         match *self {
-            Tetromino::O(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_down(rotation, c1,c2,c3,c4);
-                                                    Tetromino::O(r, cn1, cn2, cn3, cn4)},
-            Tetromino::I(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_down(rotation, c1, c2, c3, c4);
-                                                    Tetromino::I(r, cn1, cn2, cn3, cn4)},
-            Tetromino::S(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_down(rotation, c1, c2, c3, c4);
-                                                    Tetromino::S(r, cn1, cn2, cn3, cn4)},
-            Tetromino::Z(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_down(rotation, c1, c2, c3, c4);
-                                                    Tetromino::Z(r, cn1, cn2, cn3, cn4)},
-            Tetromino::T(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_down(rotation, c1, c2, c3, c4);
-                                                    Tetromino::T(r, cn1, cn2, cn3, cn4)},
-            Tetromino::J(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_down(rotation, c1, c2, c3, c4);
-                                                    Tetromino::J(r, cn1, cn2, cn3, cn4)},
-            Tetromino::L(rotation, c1,c2,c3,c4) => {let (r, cn1, cn2, cn3, cn4) = move_tetromino_down(rotation, c1, c2, c3, c4);
-                                                    Tetromino::L(r, cn1, cn2, cn3, cn4)}
+            Tetromino::O(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_down(rotation, c1, c2, c3, c4);
+                Tetromino::O(r, cn1, cn2, cn3, cn4)
+            }
+            Tetromino::I(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_down(rotation, c1, c2, c3, c4);
+                Tetromino::I(r, cn1, cn2, cn3, cn4)
+            }
+            Tetromino::S(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_down(rotation, c1, c2, c3, c4);
+                Tetromino::S(r, cn1, cn2, cn3, cn4)
+            }
+            Tetromino::Z(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_down(rotation, c1, c2, c3, c4);
+                Tetromino::Z(r, cn1, cn2, cn3, cn4)
+            }
+            Tetromino::T(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_down(rotation, c1, c2, c3, c4);
+                Tetromino::T(r, cn1, cn2, cn3, cn4)
+            }
+            Tetromino::J(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_down(rotation, c1, c2, c3, c4);
+                Tetromino::J(r, cn1, cn2, cn3, cn4)
+            }
+            Tetromino::L(rotation, c1, c2, c3, c4) => {
+                let (r, cn1, cn2, cn3, cn4) = move_tetromino_down(rotation, c1, c2, c3, c4);
+                Tetromino::L(r, cn1, cn2, cn3, cn4)
+            }
         }
     }
-
 }
-
-
 
 impl Board {
     fn new() -> Board {
-        Board{board: [[0;10]; 20]}
+        Board {
+            board: [[0; 10]; 20],
+        }
     }
 
-    fn add_tetromino(&mut self, tetromino:&Tetromino) {
+    fn add_tetromino(&mut self, tetromino: &Tetromino) {
         let ((x1, y1), (x2, y2), (x3, y3), (x4, y4)) = match tetromino {
             Tetromino::O(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
             | Tetromino::I(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
@@ -464,7 +612,12 @@ impl Board {
             | Tetromino::Z(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
             | Tetromino::T(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
             | Tetromino::J(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
-            | Tetromino::L(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4)) => ((x1-1, y1-1), (x2-1, y2-1), (x3-1, y3-1), (x4-1, y4-1))
+            | Tetromino::L(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4)) => (
+                (x1 - 1, y1 - 1),
+                (x2 - 1, y2 - 1),
+                (x3 - 1, y3 - 1),
+                (x4 - 1, y4 - 1),
+            ),
         };
         let color_index = tetronome_to_field_val(tetromino);
         self.board[y1 as usize][x1 as usize] = color_index;
@@ -473,8 +626,7 @@ impl Board {
         self.board[y4 as usize][x4 as usize] = color_index;
         //println!("{} {} {} {} {} {} {} {}", x1, y1, x2, y2 , x3, y3 , x4, y4);
         //println!("{}",self)
-}
-
+    }
 
     fn remove_full_rowes(&mut self) -> u32 {
         let mut write = 0;
@@ -499,7 +651,7 @@ impl Board {
     }
 }
 
-fn possible(board:&Board, value:&Tetromino) -> bool {
+fn possible(board: &Board, value: &Tetromino) -> bool {
     let ((x1, y1), (x2, y2), (x3, y3), (x4, y4)) = match value {
         Tetromino::O(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
         | Tetromino::I(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
@@ -507,18 +659,40 @@ fn possible(board:&Board, value:&Tetromino) -> bool {
         | Tetromino::Z(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
         | Tetromino::T(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
         | Tetromino::J(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
-        | Tetromino::L(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4)) => ((*x1, *y1), (*x2, *y2), (*x3, *y3), (*x4, *y4))
+        | Tetromino::L(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4)) => {
+            ((*x1, *y1), (*x2, *y2), (*x3, *y3), (*x4, *y4))
+        }
     };
-    if x1 < 1 || x2 < 1 || x3 < 1 || x4 < 1 || x1 > 10 || x2 > 10 || x3 > 10 || x4 > 10 || y1 < 1 || y2 < 1 || y3 < 1 || y4 < 1 || y1 > 20 || y2 > 20 || y3 > 20 || y4 > 20 {
+    if x1 < 1
+        || x2 < 1
+        || x3 < 1
+        || x4 < 1
+        || x1 > 10
+        || x2 > 10
+        || x3 > 10
+        || x4 > 10
+        || y1 < 1
+        || y2 < 1
+        || y3 < 1
+        || y4 < 1
+        || y1 > 20
+        || y2 > 20
+        || y3 > 20
+        || y4 > 20
+    {
         return false;
     }
-    if board.board[(y1 -1) as usize][(x1 -1) as usize] == 0 && board.board[(y2 -1) as usize][(x2 - 1) as usize] == 0 && board.board[(y3 -1) as usize][(x3 -1) as usize] == 0 && board.board[(y4 - 1) as usize][(x4 -1) as usize] == 0 {
+    if board.board[(y1 - 1) as usize][(x1 - 1) as usize] == 0
+        && board.board[(y2 - 1) as usize][(x2 - 1) as usize] == 0
+        && board.board[(y3 - 1) as usize][(x3 - 1) as usize] == 0
+        && board.board[(y4 - 1) as usize][(x4 - 1) as usize] == 0
+    {
         return true;
     }
     false
 }
 
-fn connected(board: &Board, value:&Tetromino) -> bool {
+fn connected(board: &Board, value: &Tetromino) -> bool {
     let ((x1, y1), (x2, y2), (x3, y3), (x4, y4)) = match value {
         Tetromino::O(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
         | Tetromino::I(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
@@ -526,25 +700,33 @@ fn connected(board: &Board, value:&Tetromino) -> bool {
         | Tetromino::Z(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
         | Tetromino::T(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
         | Tetromino::J(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
-        | Tetromino::L(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4)) => ((x1 -1 , y1 -1), (x2 -1, y2 -1), (x3 -1, y3-1), (x4-1, y4-1))
+        | Tetromino::L(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4)) => (
+            (x1 - 1, y1 - 1),
+            (x2 - 1, y2 - 1),
+            (x3 - 1, y3 - 1),
+            (x4 - 1, y4 - 1),
+        ),
     };
-    if y1 == 0 || y2 == 0  || y3 == 0 || y4 == 0 {
+    if y1 == 0 || y2 == 0 || y3 == 0 || y4 == 0 {
         return true;
     }
-    if board.board[(y1 -1) as usize ][x1 as usize] != 0 || board.board[(y2 -1) as usize ][x2 as usize] != 0 || board.board[(y3 -1) as usize ][x3 as usize] != 0 || board.board[(y4 -1) as usize ][x4 as usize] != 0 {
+    if board.board[(y1 - 1) as usize][x1 as usize] != 0
+        || board.board[(y2 - 1) as usize][x2 as usize] != 0
+        || board.board[(y3 - 1) as usize][x3 as usize] != 0
+        || board.board[(y4 - 1) as usize][x4 as usize] != 0
+    {
         return true;
     }
     false
 }
 
-fn generate_random_tetromino(prev:u8) -> u8{
+fn generate_random_tetromino(prev: u8) -> u8 {
     let n = fastrand::u8(0..=6);
     if n == prev {
         return fastrand::u8(0..=6);
     }
     n
 }
-
 
 fn render_game(
     board: &Board,
@@ -590,7 +772,12 @@ fn render_game(
 
         for cell in row {
             if *cell != 0 {
-                queue!(out, SetForegroundColor(cell_to_color(*cell)), Print("\u{2588}\u{2588}"), ResetColor)?;
+                queue!(
+                    out,
+                    SetForegroundColor(cell_to_color(*cell)),
+                    Print("\u{2588}\u{2588}"),
+                    ResetColor
+                )?;
             } else {
                 queue!(out, Print(". "))?;
             }
@@ -679,18 +866,17 @@ fn render_game(
     out.flush()
 }
 
-fn u8_to_tetromino(val:u8) -> Tetromino {
+fn u8_to_tetromino(val: u8) -> Tetromino {
     match val {
-            0 => Tetromino::O(0, (5, 20), (6, 20), (5,19), (6,19)),
-            1 => Tetromino::I(0, (5, 20), (5, 19), (5,18), (5,17)),
-            2 => Tetromino::S(0, (5, 20), (6, 20), (4,19), (5,19)),
-            3 => Tetromino::Z(0, (5, 20), (6, 20), (6,19), (7,19)),
-            4 => Tetromino::T(0, (5, 20), (4, 19), (5,19), (6,19)),
-            5 => Tetromino::J(0, (5, 20), (5, 19), (4,18), (5,18)),
-            6 => Tetromino::L(0, (5, 20), (5, 19), (5,18), (6,18)),
-            _ => panic!("tetromino value can only never be higher than 6")
+        0 => Tetromino::O(0, (5, 20), (6, 20), (5, 19), (6, 19)),
+        1 => Tetromino::I(0, (5, 20), (5, 19), (5, 18), (5, 17)),
+        2 => Tetromino::S(0, (5, 20), (6, 20), (4, 19), (5, 19)),
+        3 => Tetromino::Z(0, (5, 20), (6, 20), (6, 19), (7, 19)),
+        4 => Tetromino::T(0, (5, 20), (4, 19), (5, 19), (6, 19)),
+        5 => Tetromino::J(0, (5, 20), (5, 19), (4, 18), (5, 18)),
+        6 => Tetromino::L(0, (5, 20), (5, 19), (5, 18), (6, 18)),
+        _ => panic!("tetromino value can only never be higher than 6"),
     }
-
 }
 
 fn cell_to_color(val: u8) -> Color {
@@ -704,14 +890,10 @@ fn cell_to_color(val: u8) -> Color {
         6 => Color::Blue,
         7 => Color::DarkYellow,
         _ => Color::Reset,
-
-
     }
-
-
 }
 
-fn tetronome_to_field_val (tetromino: &Tetromino) -> u8{
+fn tetronome_to_field_val(tetromino: &Tetromino) -> u8 {
     match tetromino {
         Tetromino::O(_, _, _, _, _) => 1,
         Tetromino::I(_, _, _, _, _) => 2,
@@ -721,21 +903,18 @@ fn tetronome_to_field_val (tetromino: &Tetromino) -> u8{
         Tetromino::J(_, _, _, _, _) => 6,
         Tetromino::L(_, _, _, _, _) => 7,
     }
-
 }
 
 fn hard_drop_naive(board: &mut Board, tetromino: &Tetromino) {
-
     let mut new_val1 = Tetromino::move_down(tetromino);
     let mut new_val2 = new_val1.clone();
-    while possible(board, &new_val2){
+    while possible(board, &new_val2) {
         new_val1 = new_val2;
         new_val2 = Tetromino::move_down(&new_val2)
     }
     if connected(board, &new_val1) {
         (*board).add_tetromino(&new_val1);
-    }
-    else {
-    panic!("should not be possible");
+    } else {
+        panic!("should not be possible");
     }
 }

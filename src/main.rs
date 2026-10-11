@@ -6,25 +6,39 @@ use crossterm::{
     execute,
     queue,
     style::{Color, Print, ResetColor, SetForegroundColor},
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen,Clear, ClearType,enable_raw_mode, disable_raw_mode},
+    terminal::{self, EnterAlternateScreen, LeaveAlternateScreen,Clear, ClearType,enable_raw_mode, disable_raw_mode},
 };
 use std::fmt;
 
 fn main() {
-    play_tetris();
+    match play_tetris() {
+    Ok((level, score)) => {println!("you reached level: {}", level); println!("with a score of: {}",score)},
+    Err(e) => println!("{:?}", e)
+
+    }
 }
 
 
-fn play_tetris() -> io::Result<()> {
+fn play_tetris() -> io::Result<(u32, u32)> {
     let debug_mode = false;
-    let level = Arc::new(Mutex::new(7u32)); 
-    let worker_level = Arc::clone(&level);
-    let board = Arc::new(Mutex::new(Board::new()));
-    let worker_board = Arc::clone(&board);
     let mut first_tetromino = generate_random_tetromino(7);
     let tetromino_being_played = u8_to_tetromino(first_tetromino);
+
+    let level = Arc::new(Mutex::new(0u32)); 
+    let board = Arc::new(Mutex::new(Board::new()));
     let active_tetromino = Arc::new((Mutex::new(Some(tetromino_being_played)), Condvar::new()));
+    let score = Arc::new(Mutex::new(0u32));
+    let next_tetromino = Arc::new(Mutex::new(0u8));
+
+    let worker_board = Arc::clone(&board);
     let worker_active_tetromino = Arc::clone(&active_tetromino);
+    let worker_level = Arc::clone(&level);
+
+    let printer_board = Arc::clone(&board);
+    let printer_level = Arc::clone(&level);
+    let printer_active_tetromino = Arc::clone(&active_tetromino);
+    let printer_score = Arc::clone(&score); 
+    let printer_next_tetromino = Arc::clone(&next_tetromino);
     thread::spawn(move || {
             let speeds = [798, 715, 632, 549, 466, 383, 300, 216, 133, 100, 83,83,83, 67, 67, 67, 50, 50, 50, 33, 33, 33, 33, 33, 33, 33, 33, 33, 33, 17];
             loop {
@@ -65,7 +79,31 @@ fn play_tetris() -> io::Result<()> {
             };
     });
 
+    thread::spawn( move || {
 
+        let  (mut cols_old, mut rows_old) = terminal::size().unwrap();
+        loop {
+
+            thread::sleep(Duration::from_millis(16));
+            let level = printer_level.lock().unwrap();
+            let guard = printer_active_tetromino.0.lock().unwrap();
+            let board = printer_board.lock().unwrap();
+            let second_tetromino = printer_next_tetromino.lock().unwrap();
+            let score = printer_score.lock().unwrap();
+            let ( cols, rows) = terminal::size().unwrap();
+            if cols_old != cols || rows_old != rows {
+                execute!(io::stdout(), Clear(ClearType::All)).unwrap();
+                cols_old = cols;
+                rows_old = rows;
+
+            }
+
+            let x_offset = cols.saturating_sub(25) / 2;
+            let y_offset = rows.saturating_sub(21) /2;
+            render_game_ai(&board, guard.as_ref().unwrap(),  *second_tetromino, *score, *level, x_offset, y_offset).unwrap()
+        }
+
+    });
 
 
     if !debug_mode {
@@ -74,10 +112,10 @@ fn play_tetris() -> io::Result<()> {
     }
     let points = [0, 40, 100, 300, 1200];
     let mut second_tetromino = generate_random_tetromino(first_tetromino);
-    let mut score = 0;
     let mut lines = 0;
-    loop {
+    let res_tup: io::Result<(u32, u32), > = loop {
         let (mutex, condvar) = &*active_tetromino;
+        let mut level_val = level.lock().unwrap();
         let mut guard = mutex.lock().unwrap();
         if guard.is_none() {
             //println!("master guard is none");
@@ -87,22 +125,23 @@ fn play_tetris() -> io::Result<()> {
             let mut board = board.lock().unwrap();
             let rows_removed = (*board).remove_full_rowes();
             lines += rows_removed;
-            let mut level = level.lock().unwrap();
             if lines > 10 {
-                *level += 1;
+                *level_val += 1;
                 lines = lines % 10;
             }
-            score += points[rows_removed as usize] * (*level + 1);
+            *next_tetromino.lock().unwrap() = second_tetromino.clone();
+            let mut score = score.lock().unwrap();
+            *score += points[rows_removed as usize] * (*level_val + 1);
             //println!("notifing");
             condvar.notify_one();
             if board.board[board.board.len() - 1].iter().any(|&x| x != 0) {
-                break;
+                break Ok((*level_val,*score));
             }
         }
+        drop(level_val);
+        drop(guard);
         //println!("get board to print");
-        let mut board = board.lock().unwrap();
-        let level = level.lock().unwrap();
-        if !debug_mode {render_game(&board, guard.as_ref().unwrap(),  second_tetromino, score, *level).unwrap();}
+        
         let action = if event::poll(Duration::from_millis(0)).unwrap() {
             if let Event::Key(key) = event::read().unwrap() {
                 if key.kind == KeyEventKind::Press {
@@ -114,12 +153,14 @@ fn play_tetris() -> io::Result<()> {
                         KeyCode::Right => 3,
                         KeyCode::Char('e') => 4,
                         KeyCode::Char('q') => 5,
-                        KeyCode::Char('z') => break,
                         _ => continue,
                     }
                 } else {-1}
             } else {-1}
         } else {-1};
+        
+        let mut guard = mutex.lock().unwrap();
+        let mut board = board.lock().unwrap();
         match action {
             -1 => continue,
             0 => {hard_drop_naive(&mut board, &guard.take().expect("should never happen"));
@@ -179,12 +220,12 @@ fn play_tetris() -> io::Result<()> {
 
             _ => panic!("should never happen")
         }
-    }
+    };
     if !debug_mode {
         disable_raw_mode()?;
         execute!(io::stdout(), LeaveAlternateScreen, cursor::Show)?;
     }
-    Ok(())
+    return Ok(res_tup?);
 }
 
 
@@ -503,6 +544,143 @@ fn generate_random_tetromino(prev:u8) -> u8{
     n
 }
 
+
+fn render_game_ai(
+    board: &Board,
+    tetromino: &Tetromino,
+    queued: u8,
+    score: u32,
+    level: u32,
+    x_offset: u16,
+    y_offset: u16,
+) -> io::Result<()> {
+    let mut out = io::stdout();
+    let mut render = board.board.clone();
+
+    let ((x1, y1), (x2, y2), (x3, y3), (x4, y4)) = match tetromino {
+        Tetromino::O(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
+        | Tetromino::I(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
+        | Tetromino::S(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
+        | Tetromino::Z(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
+        | Tetromino::T(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
+        | Tetromino::J(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
+        | Tetromino::L(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4)) => (
+            (x1 - 1, y1 - 1),
+            (x2 - 1, y2 - 1),
+            (x3 - 1, y3 - 1),
+            (x4 - 1, y4 - 1),
+        ),
+    };
+
+    render[y1 as usize][x1 as usize] = 1;
+    render[y2 as usize][x2 as usize] = 1;
+    render[y3 as usize][x3 as usize] = 1;
+    render[y4 as usize][x4 as usize] = 1;
+
+    let board_height = render.len();
+    let board_width = render.first().map_or(0, |a| a.len());
+
+    // Draw the board, with its top-left corner at (x_offset, y_offset).
+    for (row_index, row) in render.iter().rev().enumerate() {
+        let terminal_y = y_offset.saturating_add(row_index as u16);
+
+        queue!(out, MoveTo(x_offset, terminal_y), Print("\u{2588}"))?;
+
+        for cell in row {
+            if *cell != 0 {
+                queue!(out, Print("\u{2588}\u{2588}"))?;
+            } else {
+                queue!(out, Print(". "))?;
+            }
+        }
+
+        queue!(out, Print("\u{2588}"))?;
+    }
+
+    // The bottom border is one character wide on each side of the board.
+    let border_width = board_width * 2 + 2;
+    let bottom_y = y_offset.saturating_add(board_height as u16);
+    queue!(
+        out,
+        MoveTo(x_offset, bottom_y),
+        Print("\u{2588}".repeat(border_width))
+    )?;
+
+    // Position the sidebar just to the right of the board.
+    let panel_x = x_offset
+        .saturating_add((board_width as u16).saturating_mul(2))
+        .saturating_add(4);
+
+    queue!(
+        out,
+        MoveTo(panel_x, y_offset.saturating_add(1)),
+        Print(format!("Level: {}", level)),
+        MoveTo(panel_x, y_offset.saturating_add(2)),
+        Print(format!("Score: {}", score)),
+        MoveTo(panel_x, y_offset.saturating_add(3)),
+        Print("Next piece:")
+    )?;
+
+    let preview: [&str; 4] = match u8_to_tetromino(queued) {
+        Tetromino::O(_, _, _, _, _) => [
+            "\u{2588}\u{2588}\u{2588}\u{2588}  ",
+            "\u{2588}\u{2588}\u{2588}\u{2588}  ",
+            "      ",
+            "      ",
+        ],
+        Tetromino::I(_, _, _, _, _) => [
+            "\u{2588}\u{2588}    ",
+            "\u{2588}\u{2588}    ",
+            "\u{2588}\u{2588}    ",
+            "\u{2588}\u{2588}    ",
+        ],
+        Tetromino::S(_, _, _, _, _) => [
+            "  \u{2588}\u{2588}\u{2588}\u{2588}",
+            "\u{2588}\u{2588}\u{2588}\u{2588}  ",
+            "      ",
+            "      ",
+        ],
+        Tetromino::Z(_, _, _, _, _) => [
+            "\u{2588}\u{2588}\u{2588}\u{2588}  ",
+            "  \u{2588}\u{2588}\u{2588}\u{2588}",
+            "      ",
+            "      ",
+        ],
+        Tetromino::T(_, _, _, _, _) => [
+            "  \u{2588}\u{2588}  ",
+            "\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}",
+            "      ",
+            "      ",
+        ],
+        Tetromino::J(_, _, _, _, _) => [
+            "  \u{2588}\u{2588}  ",
+            "  \u{2588}\u{2588}  ",
+            "\u{2588}\u{2588}\u{2588}\u{2588}  ",
+            "      ",
+        ],
+        Tetromino::L(_, _, _, _, _) => [
+            "\u{2588}\u{2588}    ",
+            "\u{2588}\u{2588}    ",
+            "\u{2588}\u{2588}\u{2588}\u{2588}  ",
+            "      ",
+        ],
+    };
+
+    for (row, line) in preview.iter().enumerate() {
+        queue!(
+            out,
+            MoveTo(panel_x, y_offset.saturating_add(4 + row as u16)),
+            Print(line)
+        )?;
+    }
+
+    out.flush()
+}
+
+
+
+
+
 fn render_game (board: &Board, tetromino:&Tetromino, queued:u8, score:u32, level: u32) -> io::Result<()> {
     let mut out = io::stdout();
     
@@ -516,7 +694,8 @@ fn render_game (board: &Board, tetromino:&Tetromino, queued:u8, score:u32, level
         | Tetromino::J(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4))
         | Tetromino::L(_, (x1, y1), (x2, y2), (x3, y3), (x4, y4)) => ((x1 -1 , y1 -1), (x2 -1, y2 -1), (x3 -1, y3-1), (x4-1, y4-1))
     };
-    
+    let x_offset = 5;
+    let y_offset = 5;
     
     render[y1 as usize][x1 as usize] = 1;
     render[y2 as usize][x2 as usize] = 1;
@@ -536,7 +715,6 @@ fn render_game (board: &Board, tetromino:&Tetromino, queued:u8, score:u32, level
         queue!(out, Print("\u{2588}\r\n"))?;
     }
     queue!(out, Print("\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\r\n")).unwrap();
-    queue!(out, Print(format!("Score: {}\r\nLevel: {}", score, level)))?;
     queue!(out, MoveTo(24, 1), Print(format!("Level: {}", level)))?;
     queue!(out, MoveTo(24, 2), Print(format!("Score: {}", score)))?;
     queue!(out, MoveTo(24, 3), Print("Next piece:"))?;

@@ -3,10 +3,10 @@
 ## user manual
 
 use `q` and `e` to rotate clockwise and counter - clockwise
-use ` ` to hard drop a tetromino
-use the down arrow, `s` or `j` to soft drop a tetromino
-use the left arrow, `a` or `h` to move the tetromino to the left
-use the right arrow, `d` or `l`  to move the tetromino to the right and left
+use ` ` to hard drop a block
+use the down arrow, `s` or `j` to soft drop a block
+use the left arrow, `a` or `h` to move the block to the left
+use the right arrow, `d` or `l`  to move the block to the right and left
 
 
 ## level calculation
@@ -25,7 +25,7 @@ the only way to incease the score is by clearing rows. the score is calculated b
 
 ## passive drop speed
 
-a tetromino passive drop speed is dependend on the level the drop speed is the amount of ms it takes for the tetromino to drop 1 row
+a block passive drop speed is dependend on the level the drop speed is the amount of ms it takes for the block to drop 1 row
 
 | level | drop speed |
 |-------|------------|

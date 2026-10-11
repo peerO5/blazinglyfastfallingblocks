@@ -1,4 +1,4 @@
-# (Blazingly Fast) Tetris
+# (Blazingly Fast) Falling blocks
 
 ## user manual
 

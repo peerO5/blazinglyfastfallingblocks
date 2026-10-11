@@ -4,8 +4,9 @@
 
 use `q` and `e` to rotate clockwise and counter - clockwise
 use ` ` to hard drop a tetromino
-use the down arrow to soft drop a tetromino
-use the left and right arrow to move the tetromino to the right and left
+use the down arrow, `s` or `j` to soft drop a tetromino
+use the left arrow, `a` or `h` to move the tetromino to the left
+use the right arrow, `d` or `l`  to move the tetromino to the right and left
 
 
 ## level calculation
@@ -13,7 +14,7 @@ at the beginning you start at level 0 per 10 rows cleared your level increases b
 
 ## score calculation
 
-the score is calculated based on the rows cleared mutliplied with the level
+the only way to incease the score is by clearing rows. the score is calculated based on the amount of rows cleared at once, mutliplied with the current level.
 
 | Rows cleared | Score calulation |
 |--------------| -----------------|

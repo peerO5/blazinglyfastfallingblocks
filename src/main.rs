@@ -163,9 +163,9 @@ fn play_tetris() -> io::Result<(u32, u32)> {
                     match key.code {
                         KeyCode::Char('r') => 4,
                         KeyCode::Char(' ') => 0,
-                        KeyCode::Down => 1,
-                        KeyCode::Left => 2,
-                        KeyCode::Right => 3,
+                        KeyCode::Down | KeyCode::Char('s') | KeyCode::Char('j') => 1,
+                        KeyCode::Left | KeyCode::Char('a') | KeyCode::Char('h') => 2,
+                        KeyCode::Right | KeyCode::Char('d') | KeyCode::Char('l') => 3,
                         KeyCode::Char('e') => 4,
                         KeyCode::Char('q') => 5,
                         _ => continue,

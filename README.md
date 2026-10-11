@@ -1,6 +1,49 @@
-# issues
+# (Blazingly Fast) Tetris
 
-1. hard_drop does not work yet it clips weirdly it probs has something to do with the calucation.
-2. rotating I in the left gives an error since you get buffer overflow, since when you rotate it is sometimes -2 if it is at index 0 (which is saved as 1 in the Tetromino enum than 1 - 2 = -1 which is not valid for u8
-3. moving blocks allows for going trough blocks sometimes fn possible() might need to be adapted
-4. the timed going down cant check connected like it is now since now you dont have time to move it to the right of left when it is touching but not yet placed so it should be if not possible (check iteration later) i implemented a gut feeling fix might not work
+## user manual
+
+use `q` and `e` to rotate clockwise and counter - clockwise
+use ` ` to hard drop a tetromino
+use the down arrow to soft drop a tetromino
+use the left and right arrow to move the tetromino to the right and left
+
+
+## level calculation
+at the beginning you start at level 0 per 10 rows cleared your level increases by 1
+
+## score calculation
+
+the score is calculated based on the rows cleared mutliplied with the level
+
+| Rows cleared | Score calulation |
+|--------------| -----------------|
+| 1 | 40 * (level + 1)   |
+| 2 | 100 * (level + 1)  |
+| 3 | 300 * (level + 1)  |
+| 4 | 1200 * (level + 1) |
+
+## passive drop speed
+
+a tetromino passive drop speed is dependend on the level the drop speed is the amount of ms it takes for the tetromino to drop 1 row
+
+| level | drop speed |
+|-------|------------|
+| 0 | 798 |
+| 1 | 715 |
+| 2 | 632 |
+| 3 | 549 |
+| 4 | 466 |
+| 5 | 383 |
+| 6 | 300 |
+| 7 | 216 |
+| 8 | 133 |
+| 9 | 100 |
+| 10-12 | 83 |
+| 13-15 | 67 |
+| 16-18 | 50 |
+| 19-28 | 33 |
+| 29+ | 17 |
+
+the board is redrawn at ~60 fps ( 16 ms)
+
+

@@ -29,14 +29,15 @@ fn main() {
 
 fn play_tetris() -> io::Result<(u32, u32)> {
     let debug_mode = false;
-    let mut first_tetromino = generate_random_tetromino(7);
+    let first_tetromino = generate_random_tetromino(7);
     let tetromino_being_played = u8_to_tetromino(first_tetromino);
 
     let level = Arc::new(Mutex::new(0u32));
     let board = Arc::new(Mutex::new(Board::new()));
     let active_tetromino = Arc::new((Mutex::new(Some(tetromino_being_played)), Condvar::new()));
     let score = Arc::new(Mutex::new(0u32));
-    let next_tetromino = Arc::new(Mutex::new(0u8));
+    let mut second_tetromino = generate_random_tetromino(first_tetromino);
+    let next_tetromino = Arc::new(Mutex::new(second_tetromino));
 
     let worker_board = Arc::clone(&board);
     let worker_active_tetromino = Arc::clone(&active_tetromino);
@@ -47,95 +48,21 @@ fn play_tetris() -> io::Result<(u32, u32)> {
     let printer_active_tetromino = Arc::clone(&active_tetromino);
     let printer_score = Arc::clone(&score);
     let printer_next_tetromino = Arc::clone(&next_tetromino);
-    thread::spawn(move || {
-        let speeds = [
-            798, 715, 632, 549, 466, 383, 300, 216, 133, 100, 83, 83, 83, 67, 67, 67, 50, 50, 50,
-            33, 33, 33, 33, 33, 33, 33, 33, 33, 33, 17,
-        ];
-        loop {
-            //println!("moving block one down");
-            let level = worker_level.lock().unwrap();
-            let speed = if *level > 29 {
-                17
-            } else {
-                speeds[*level as usize]
-            };
-            drop(level);
-            thread::sleep(Duration::from_millis(speed));
-            let (mutex, condvar) = &*worker_active_tetromino;
-            let mut guard = mutex.lock().unwrap();
-            while guard.is_none() {
-                //println!("guard is none waiting");
-                guard = condvar.wait(guard).unwrap();
-            }
-            let old_value = guard.take().expect("value should be present");
-
-            let new_value = Tetromino::move_down(&old_value);
-            let mut board = worker_board.lock().unwrap();
-
-            //println!("{:?}",&new_value);
-            if possible(&board, &new_value) {
-                *guard = Some(new_value);
-            } else {
-                if connected(&board, &old_value) {
-                    //println!("adding block to board");
-                    //println!("{:?}",old_value);
-                    (*board).add_tetromino(&old_value);
-                    *guard = None;
-                    //println!("{:?}", &board);
-                } else {
-                    *guard = Some(old_value);
-                }
-            }
-        }
-    });
-
-    thread::spawn(move || {
-        let (mut cols_old, mut rows_old) = terminal::size().unwrap();
-        loop {
-            thread::sleep(Duration::from_millis(16));
-            let level = printer_level.lock().unwrap();
-            let guard = printer_active_tetromino.0.lock().unwrap();
-            let board = printer_board.lock().unwrap();
-            let second_tetromino = printer_next_tetromino.lock().unwrap();
-            let score = printer_score.lock().unwrap();
-            let (cols, rows) = terminal::size().unwrap();
-            if cols_old != cols || rows_old != rows {
-                execute!(io::stdout(), Clear(ClearType::All)).unwrap();
-                cols_old = cols;
-                rows_old = rows;
-            }
-
-            let x_offset = cols.saturating_sub(25) / 2;
-            let y_offset = rows.saturating_sub(21) / 2;
-            render_game(
-                &board,
-                guard.as_ref().unwrap(),
-                *second_tetromino,
-                *score,
-                *level,
-                x_offset,
-                y_offset,
-            )
-            .unwrap()
-        }
-    });
+    thread::spawn(move || active_block_mover(worker_level, worker_active_tetromino, worker_board));
+    thread::spawn(move || board_printer(printer_level, printer_active_tetromino, printer_board, printer_next_tetromino, printer_score));
 
     if !debug_mode {
         enable_raw_mode()?;
         execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)?;
     }
     let points = [0, 40, 100, 300, 1200];
-    let mut second_tetromino = generate_random_tetromino(first_tetromino);
     let mut lines = 0;
     let res_tup: io::Result<(u32, u32)> = loop {
         let (mutex, condvar) = &*active_tetromino;
         let mut level_val = level.lock().unwrap();
         let mut guard = mutex.lock().unwrap();
         if guard.is_none() {
-            //println!("master guard is none");
             *guard = Some(u8_to_tetromino(second_tetromino));
-            first_tetromino = second_tetromino;
             second_tetromino = generate_random_tetromino(second_tetromino);
             let mut board = board.lock().unwrap();
             let rows_removed = (*board).remove_full_rowes();
@@ -147,7 +74,6 @@ fn play_tetris() -> io::Result<(u32, u32)> {
             *next_tetromino.lock().unwrap() = second_tetromino.clone();
             let mut score = score.lock().unwrap();
             *score += points[rows_removed as usize] * (*level_val + 1);
-            //println!("notifing");
             condvar.notify_one();
             if board.board[board.board.len() - 1].iter().any(|&x| x != 0) {
                 break Ok((*level_val, *score));
@@ -155,7 +81,6 @@ fn play_tetris() -> io::Result<(u32, u32)> {
         }
         drop(level_val);
         drop(guard);
-        //println!("get board to print");
 
         let action = if event::poll(Duration::from_millis(0)).unwrap() {
             if let Event::Key(key) = event::read().unwrap() {
@@ -193,10 +118,8 @@ fn play_tetris() -> io::Result<(u32, u32)> {
                 let new_val = Tetromino::move_down(&old_val);
                 if possible(&board, &new_val) {
                     if connected(&board, &new_val) {
-                        //println!("adding block to board");
                         (*board).add_tetromino(&new_val);
                         *guard = None;
-                        //println!("{:?}", &board);
                     } else {
                         *guard = Some(new_val);
                     }
@@ -252,6 +175,84 @@ fn play_tetris() -> io::Result<(u32, u32)> {
     return Ok(res_tup?);
 }
 
+fn active_block_mover(arc_level:Arc<Mutex<u32>>, active_tetromino:Arc<(Mutex<Option<Tetromino>>, Condvar)>, arc_board:Arc<Mutex<Board>>) {
+        let speeds = [
+            798, 715, 632, 549, 466, 383, 300, 216, 133, 100, 83, 83, 83, 67, 67, 67, 50, 50, 50,
+            33, 33, 33, 33, 33, 33, 33, 33, 33, 33, 17,
+        ];
+        loop {
+            //println!("moving block one down");
+            let level = arc_level.lock().unwrap();
+            let speed = if *level > 29 {
+                17
+            } else {
+                speeds[*level as usize]
+            };
+            drop(level);
+            thread::sleep(Duration::from_millis(speed));
+            let (mutex, condvar) = &*active_tetromino;
+            let mut guard = mutex.lock().unwrap();
+            while guard.is_none() {
+                //println!("guard is none waiting");
+                guard = condvar.wait(guard).unwrap();
+            }
+            let old_value = guard.take().expect("value should be present");
+
+            let new_value = Tetromino::move_down(&old_value);
+            let mut board = arc_board.lock().unwrap();
+
+            //println!("{:?}",&new_value);
+            if possible(&board, &new_value) {
+                *guard = Some(new_value);
+            } else {
+                if connected(&board, &old_value) {
+                    //println!("adding block to board");
+                    //println!("{:?}",old_value);
+                    (*board).add_tetromino(&old_value);
+                    *guard = None;
+                    //println!("{:?}", &board);
+                } else {
+                    *guard = Some(old_value);
+                }
+            }
+        }
+}
+fn board_printer(
+    arc_level:Arc<Mutex<u32>>,
+    active_tetromino:Arc<(Mutex<Option<Tetromino>>, Condvar)>,
+    arc_board:Arc<Mutex<Board>>,next_tetromino:Arc<Mutex<u8>>,
+    arc_score:Arc<Mutex<u32>>)
+{
+    let (mut cols_old, mut rows_old) = terminal::size().unwrap();
+    loop {
+        thread::sleep(Duration::from_millis(16));
+        let level = arc_level.lock().unwrap();
+        let guard = active_tetromino.0.lock().unwrap();
+        let board = arc_board.lock().unwrap();
+        let second_tetromino = next_tetromino.lock().unwrap();
+        let score = arc_score.lock().unwrap();
+        let (cols, rows) = terminal::size().unwrap();
+        if cols_old != cols || rows_old != rows {
+            execute!(io::stdout(), Clear(ClearType::All)).unwrap();
+            cols_old = cols;
+            rows_old = rows;
+        }
+
+        let x_offset = cols.saturating_sub(25) / 2;
+        let y_offset = rows.saturating_sub(21) / 2;
+        render_game(
+            &board,
+            guard.as_ref().unwrap(),
+            *second_tetromino,
+            *score,
+            *level,
+            x_offset,
+            y_offset,
+        )
+        .unwrap()
+    }
+}
+
 #[derive(Debug)]
 struct Board {
     board: [[u8; 10]; 20],
@@ -299,25 +300,25 @@ impl Tetromino {
     fn rotate_right(&self) -> Tetromino {
         match *self {
             Tetromino::O(rotation, c1, c2, c3, c4) => {
-                Tetromino::O_rotate_right(rotation, c1, c2, c3, c4)
+                Tetromino::o_rotate_right(rotation, c1, c2, c3, c4)
             }
             Tetromino::I(rotation, c1, c2, c3, c4) => {
-                Tetromino::I_rotate_right(rotation, c1, c2, c3, c4)
+                Tetromino::i_rotate_right(rotation, c1, c2, c3, c4)
             }
             Tetromino::S(rotation, c1, c2, c3, c4) => {
-                Tetromino::S_rotate_right(rotation, c1, c2, c3, c4)
+                Tetromino::s_rotate_right(rotation, c1, c2, c3, c4)
             }
             Tetromino::Z(rotation, c1, c2, c3, c4) => {
-                Tetromino::Z_rotate_right(rotation, c1, c2, c3, c4)
+                Tetromino::z_rotate_right(rotation, c1, c2, c3, c4)
             }
             Tetromino::T(rotation, c1, c2, c3, c4) => {
-                Tetromino::T_rotate_right(rotation, c1, c2, c3, c4)
+                Tetromino::t_rotate_right(rotation, c1, c2, c3, c4)
             }
             Tetromino::J(rotation, c1, c2, c3, c4) => {
-                Tetromino::J_rotate_right(rotation, c1, c2, c3, c4)
+                Tetromino::j_rotate_right(rotation, c1, c2, c3, c4)
             }
             Tetromino::L(rotation, c1, c2, c3, c4) => {
-                Tetromino::L_rotate_right(rotation, c1, c2, c3, c4)
+                Tetromino::l_rotate_right(rotation, c1, c2, c3, c4)
             }
         }
     }
@@ -326,7 +327,7 @@ impl Tetromino {
         self.rotate_right().rotate_right().rotate_right()
     }
 
-    fn O_rotate_right(
+    fn o_rotate_right(
         rotation: u8,
         (x1, y1): (u8, u8),
         (x2, y2): (u8, u8),
@@ -343,7 +344,7 @@ impl Tetromino {
         }
     }
 
-    fn I_rotate_right(
+    fn i_rotate_right(
         rotation: u8,
         (x1, y1): (u8, u8),
         (x2, y2): (u8, u8),
@@ -369,7 +370,7 @@ impl Tetromino {
         }
     }
 
-    fn S_rotate_right(
+    fn s_rotate_right(
         rotation: u8,
         (x1, y1): (u8, u8),
         (x2, y2): (u8, u8),
@@ -385,12 +386,12 @@ impl Tetromino {
         }
     }
 
-    fn Z_rotate_right(
+    fn z_rotate_right(
         rotation: u8,
-        (x1, y1): (u8, u8),
+        (_x1, _y1): (u8, u8),
         (x2, y2): (u8, u8),
         (x3, y3): (u8, u8),
-        (x4, y4): (u8, u8),
+        (_x4, _y4): (u8, u8),
     ) -> Tetromino {
         match rotation {
             0 => Tetromino::Z(1, (x3 + 1, y3 + 1), (x3, y3), (x3 + 1, y3), (x3, y3 - 1)),
@@ -401,12 +402,12 @@ impl Tetromino {
         }
     }
 
-    fn T_rotate_right(
+    fn t_rotate_right(
         rotation: u8,
-        (x1, y1): (u8, u8),
+        (_x1, _y1): (u8, u8),
         (x2, y2): (u8, u8),
         (x3, y3): (u8, u8),
-        (x4, y4): (u8, u8),
+        (_x4, _y4): (u8, u8),
     ) -> Tetromino {
         match rotation {
             0 => Tetromino::T(1, (x3, y3 + 1), (x3, y3), (x3 + 1, y3), (x3, y3 - 1)),
@@ -417,12 +418,12 @@ impl Tetromino {
         }
     }
 
-    fn J_rotate_right(
+    fn j_rotate_right(
         rotation: u8,
-        (x1, y1): (u8, u8),
+        (_x1, _y1): (u8, u8),
         (x2, y2): (u8, u8),
         (x3, y3): (u8, u8),
-        (x4, y4): (u8, u8),
+        (_x4, _y4): (u8, u8),
     ) -> Tetromino {
         match rotation {
             0 => Tetromino::J(1, (x2 - 1, y2 + 1), (x2 - 1, y2), (x2, y2), (x2 + 1, y2)),
@@ -433,12 +434,12 @@ impl Tetromino {
         }
     }
 
-    fn L_rotate_right(
+    fn l_rotate_right(
         rotation: u8,
-        (x1, y1): (u8, u8),
+        (_x1, _y1): (u8, u8),
         (x2, y2): (u8, u8),
         (x3, y3): (u8, u8),
-        (x4, y4): (u8, u8),
+        (_x4, _y4): (u8, u8),
     ) -> Tetromino {
         match rotation {
             0 => Tetromino::L(1, (x2 - 1, y2), (x2, y2), (x2 + 1, y2), (x2 - 1, y2 - 1)),
@@ -907,6 +908,10 @@ fn tetronome_to_field_val(tetromino: &Tetromino) -> u8 {
 
 fn hard_drop_naive(board: &mut Board, tetromino: &Tetromino) {
     let mut new_val1 = Tetromino::move_down(tetromino);
+    if !possible(board, &new_val1){
+        (*board).add_tetromino(tetromino);
+        return
+    }
     let mut new_val2 = new_val1.clone();
     while possible(board, &new_val2) {
         new_val1 = new_val2;

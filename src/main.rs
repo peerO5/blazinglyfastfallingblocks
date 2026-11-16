@@ -80,40 +80,18 @@ fn play_tetris() -> io::Result<(u32, u32)> {
             }
         }
         drop(level_val);
-        drop(guard);
 
-        let action = if event::poll(Duration::from_millis(0)).unwrap() {
-            if let Event::Key(key) = event::read().unwrap() {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('r') => 4,
-                        KeyCode::Char(' ') => 0,
-                        KeyCode::Down | KeyCode::Char('s') | KeyCode::Char('j') => 1,
-                        KeyCode::Left | KeyCode::Char('a') | KeyCode::Char('h') => 2,
-                        KeyCode::Right | KeyCode::Char('d') | KeyCode::Char('l') => 3,
-                        KeyCode::Char('e') => 4,
-                        KeyCode::Char('q') => 5,
-                        _ => continue,
-                    }
-                } else {
-                    -1
-                }
-            } else {
-                -1
-            }
-        } else {
-            -1
-        };
-
-        let mut guard = mutex.lock().unwrap();
         let mut board = board.lock().unwrap();
-        match action {
-            -1 => continue,
-            0 => {
+        if !event::poll(Duration::ZERO).unwrap() {continue}
+        let Event::Key(key) = event::read().unwrap() else {continue};
+        if key.kind != KeyEventKind::Press {continue}
+        match key.code {
+                        KeyCode::Char(' ') => {
                 hard_drop_naive(&mut board, &guard.take().expect("should never happen"));
                 *guard = None;
-            }
-            1 => {
+
+            },
+                        KeyCode::Down | KeyCode::Char('s') | KeyCode::Char('j') => {
                 let old_val = guard.take().expect("should never happen");
                 let new_val = Tetromino::move_down(&old_val);
                 if possible(&board, &new_val) {
@@ -126,8 +104,9 @@ fn play_tetris() -> io::Result<(u32, u32)> {
                 } else {
                     *guard = Some(old_val);
                 }
-            }
-            2 => {
+
+            },
+                        KeyCode::Left | KeyCode::Char('a') | KeyCode::Char('h') => {
                 let old_val = guard.take().expect("should never happen");
                 let new_val = Tetromino::move_left(&old_val);
                 if possible(&board, &new_val) {
@@ -135,8 +114,9 @@ fn play_tetris() -> io::Result<(u32, u32)> {
                 } else {
                     *guard = Some(old_val);
                 }
-            }
-            3 => {
+
+            },
+                        KeyCode::Right | KeyCode::Char('d') | KeyCode::Char('l') => {
                 let old_val = guard.take().expect("should never happen");
                 let new_val = Tetromino::move_right(&old_val);
                 if possible(&board, &new_val) {
@@ -144,9 +124,9 @@ fn play_tetris() -> io::Result<(u32, u32)> {
                 } else {
                     *guard = Some(old_val);
                 }
-            }
 
-            4 => {
+            },
+                        KeyCode::Char('e') | KeyCode::Char('r')  => {
                 let old_val = guard.take().expect("should never happen");
                 let new_val = Tetromino::rotate_right(&old_val);
                 if possible(&board, &new_val) {
@@ -154,8 +134,9 @@ fn play_tetris() -> io::Result<(u32, u32)> {
                 } else {
                     *guard = Some(old_val);
                 }
-            }
-            5 => {
+
+            },
+                        KeyCode::Char('q') => {
                 let old_val = guard.take().expect("should never happen");
                 let new_val = Tetromino::rotate_left(&old_val);
                 if possible(&board, &new_val) {
@@ -163,10 +144,11 @@ fn play_tetris() -> io::Result<(u32, u32)> {
                 } else {
                     *guard = Some(old_val);
                 }
-            }
 
-            _ => panic!("should never happen"),
-        }
+            },
+                        _ => continue,
+        };
+
     };
     if !debug_mode {
         disable_raw_mode()?;
